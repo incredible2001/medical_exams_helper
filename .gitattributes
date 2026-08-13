@@ -1,0 +1,8 @@
+# Windows 批处理必须保持 CRLF，否则 cmd 解析错乱
+*.bat text eol=crlf
+
+# 文本文件统一 UTF-8
+*.py text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.md text eol=lf

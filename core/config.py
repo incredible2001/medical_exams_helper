@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import json
+import sys
 import tomllib
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if getattr(sys, "frozen", False):
+    # 打包为 exe 时，项目根 = exe 所在目录（配置/数据都在 exe 旁边）
+    PROJECT_ROOT = Path(sys.executable).resolve().parent
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def load_config(path: str | Path | None = None) -> dict:

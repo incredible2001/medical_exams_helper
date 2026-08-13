@@ -12,6 +12,11 @@ __pycache__/
 .venv/
 venv/
 
+# ===== 打包产物（exe 构建）=====
+build/
+dist/
+*.spec
+
 # ===== IDE / OS =====
 .idea/
 .vscode/

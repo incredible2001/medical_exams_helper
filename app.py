@@ -13,7 +13,9 @@ from tkinter import scrolledtext, ttk
 
 from dotenv import load_dotenv
 
-load_dotenv()
+from core.config import PROJECT_ROOT
+
+load_dotenv(PROJECT_ROOT / ".env")
 
 from core.adb import Adb, AdbError  # noqa: E402
 from core.aggregate_service import AggregateService  # noqa: E402
@@ -117,6 +119,13 @@ class App:
         self.hist_cnt = tk.Label(row2, text="", bg="#f5f6f8", fg="#6b7280",
                                  font=("Microsoft YaHei", 10))
         self.hist_cnt.pack(side="left", padx=2)
+
+        row3 = tk.Frame(self.root, bg="#f5f6f8")
+        row3.pack(fill="x", padx=10, pady=(2, 4))
+        tk.Button(row3, text="❓ 使用说明", command=self._open_help, width=14,
+                  bg="#f3f4f6", fg="#374151", relief="flat", font=FONT).pack(side="left", padx=3)
+        tk.Button(row3, text="⚙ 设置", command=self._open_settings, width=14,
+                  bg="#f3f4f6", fg="#374151", relief="flat", font=FONT).pack(side="left", padx=3)
 
         # 醒目状态行
         self.status_var = tk.StringVar(value="启动中…")
@@ -279,6 +288,14 @@ class App:
                     self._set_status(payload)
                     self._post_log(f"[{_ts()}] {payload}")
         self._refresh_count()
+
+    def _open_help(self):
+        from ui_dialogs import HelpDialog
+        HelpDialog(self.root)
+
+    def _open_settings(self):
+        from ui_dialogs import SettingsDialog
+        SettingsDialog(self.root, self.cfg)
 
     def _do_open_handbook(self):
         path = os.path.join(self.cfg["data"]["handbook_dir"], "考前速通手册.html")

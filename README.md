@@ -24,6 +24,21 @@
 
 ## 🚀 快速开始
 
+### 🐣 小白（无编程基础）两条路
+
+**方式 A：用打包好的 exe（推荐，无需装 Python）**
+1. 让有经验的同学运行 `build_exe.bat` 打包出 `dist\医考帮备考助手.exe`
+2. 把 `医考帮备考助手.exe` + `config.toml` + `taxonomy.json` + `.env.example` 放进同一个文件夹
+3. 压缩发给同学 → 同学解压 → **双击 exe** → 点窗口里「⚙ 设置」填自己的 API Key → 开刷
+
+**方式 B：用 .bat 启动（需要装 Python）**
+1. 安装 [Python 3.11+](https://www.python.org/downloads/)（勾选 *Add python.exe to PATH*）
+2. 双击 **`install.bat`** 一键装依赖
+3. 双击 **`启动备考助手.bat`** 即可启动
+4. 首次打开点「⚙ 设置」填 API Key；找不到 adb 时按提示选择 MuMu 的 `adb.exe`
+
+两个启动文件都在项目根目录，双击即用。
+
 ### 环境要求
 - Windows + [MuMu 模拟器 12](https://www.mumuplayer.com/)（或其他可 adb 连接的安卓模拟器）
 - Python 3.11+（推荐 3.13/3.14）
