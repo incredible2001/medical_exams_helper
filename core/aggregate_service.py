@@ -66,10 +66,20 @@ class AggregateService:
 
     def aggregate(self) -> Iterator[tuple[str, str]]:
         rows = self.db.unprocessed_questions()
+        # 整理前：把「待绑定」评论尽量并入同试卷的待整理题
+        bound = 0
+        if self.db.pending_count() and rows:
+            for q in rows:
+                if q.get("paper"):
+                    bound += self.db.bind_pending(q["id"], q["paper"])
         if not rows:
-            yield ("status", "没有待整理的新错题")
+            remain = self.db.pending_count()
+            tip = f"；另有 {remain} 条评论待绑定（回题干处按 F7 合并）" if remain else ""
+            yield ("status", "没有待整理的新错题" + tip)
             yield ("done", "")
             return
+        if bound:
+            yield ("status", f"已先补绑 {bound} 条待绑定评论…")
         # 附带每题精选评论
         for q in rows:
             q["_comments"] = self.db.get_comments(q["id"])
@@ -109,4 +119,7 @@ class AggregateService:
         summary = f"✅ 整理完成：新增 {total} 题，更新 {groups} 组薄弱点"
         if path:
             summary += f"\n手册已生成：{path}"
+        remain = self.db.pending_count()
+        if remain:
+            summary += f"\n⚠ 还有 {remain} 条评论待绑定（回题干处按 F7 再按一次即合并）"
         yield ("done", summary)

@@ -80,6 +80,13 @@ class DB:
                     key TEXT PRIMARY KEY,
                     value TEXT
                 );
+                CREATE TABLE IF NOT EXISTS explain_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    question_id TEXT,
+                    stem TEXT,
+                    content TEXT,
+                    created_at TEXT
+                );
                 CREATE INDEX IF NOT EXISTS idx_comments_q ON comments(question_id);
                 CREATE INDEX IF NOT EXISTS idx_questions_paper ON questions(paper);
                 """
@@ -205,6 +212,12 @@ class DB:
             self._conn.commit()
             return added
 
+    def remove_comment(self, qid: str, content: str) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM comments WHERE question_id=? AND content=?",
+                               (qid, content))
+            self._conn.commit()
+
     def get_comments(self, qid: str) -> list[dict]:
         with self._lock:
             rows = self._conn.execute(
@@ -259,6 +272,38 @@ class DB:
                 self._conn.execute("DELETE FROM pending_comments WHERE id=?", (r["id"],))
             self._conn.commit()
             return len(bound)
+
+    def touch_dirty(self, qid: str) -> None:
+        """新评论/解析并入「已整理」的题时，标记为待重整理（下次 F9 重新汇总）。"""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE questions SET processed=0, updated_at=? WHERE id=? AND processed=1",
+                (now_iso(), qid),
+            )
+            self._conn.commit()
+
+    def pending_count(self) -> int:
+        with self._lock:
+            return self._conn.execute("SELECT COUNT(*) FROM pending_comments").fetchone()[0]
+
+    # ---------- explain history（F8 解析历史）----------
+    def add_explain_history(self, question_id: str | None, stem: str | None,
+                            content: str) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO explain_history(question_id, stem, content, created_at) "
+                "VALUES(?,?,?,?)",
+                (question_id, stem, content, now_iso()),
+            )
+            self._conn.commit()
+            return cur.lastrowid
+
+    def recent_explain_history(self, limit: int = 100) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM explain_history ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+            return [dict(r) for r in reversed(rows)]
 
     # ---------- meta ----------
     def meta_get(self, key: str, default: Any = None) -> Any:

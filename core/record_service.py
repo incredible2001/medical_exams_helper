@@ -50,6 +50,8 @@ class RecordService:
         q = self._screen_to_question(screen)
         self.db.upsert_question(q)
         added = self.db.append_comments(q["id"], screen["comments"])  # 部分滚动时题干屏也可能带评论
+        if added:  # 新评论并入已整理过的题 → 下次 F9 重整理
+            self.db.touch_dirty(q["id"])
         img_path = self._crop_image(q["id"], xml)
         if img_path:
             self.db.upsert_question({"id": q["id"], "image_path": img_path})
@@ -86,6 +88,8 @@ class RecordService:
         if len(patch) > 1:
             self.db.upsert_question(patch)
         added = self.db.append_comments(recent["id"], screen["comments"])
+        if added or len(patch) > 1:
+            self.db.touch_dirty(recent["id"])  # 新内容并入已整理过的题 → 下次 F9 重整理
         qid = recent.get("question_id") or recent["id"][:8]
         return True, f"✅ 已并入 {qid} 的评论 +{added} 条" if added else f"✅ 已并入 {qid}（无新评论）"
 
