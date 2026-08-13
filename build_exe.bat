@@ -25,9 +25,19 @@ echo 正在安装 PyInstaller...
 %PY% -m pip install pyinstaller
 if errorlevel 1 goto :err
 
-echo 正在打包（约 1 到 3 分钟，请耐心等待）...
+echo 正在打包（约 2 到 4 分钟，请耐心等待）...
 rem 用 ASCII 名打包，避免中文名在部分环境出问题，打包后再重命名
-%PY% -m PyInstaller --noconfirm --onefile --windowed --name "yikao_helper" main.py
+rem 精简依赖：剔除 openai 可选的 requests/cryptography 链、PIL 无用格式插件等
+%PY% -m PyInstaller --noconfirm --onefile --windowed --name "yikao_helper" main.py ^
+  --exclude-module requests --exclude-module urllib3 --exclude-module cryptography ^
+  --exclude-module charset_normalizer --exclude-module PySocks --exclude-module socks ^
+  --exclude-module websockets --exclude-module click --exclude-module werkzeug ^
+  --exclude-module google --exclude-module setuptools --exclude-module pkg_resources ^
+  --exclude-module contourpy --exclude-module cycler --exclude-module pyparsing ^
+  --exclude-module numpy --exclude-module pandas --exclude-module matplotlib --exclude-module scipy ^
+  --exclude-module PIL._avif --exclude-module PIL._webp --exclude-module PIL._imagingft ^
+  --exclude-module PIL._imagingcms --exclude-module PIL._imagingmath --exclude-module PIL._imagingtk ^
+  --exclude-module tqdm --exclude-module _wmi
 if errorlevel 1 goto :err
 if exist "dist\yikao_helper.exe" (
   move /y "dist\yikao_helper.exe" "dist\医考帮备考助手.exe" >nul
