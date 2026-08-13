@@ -1,0 +1,29 @@
+# ===== 医考帮备考助手 配置文件 =====
+# 本文件不含任何密钥，可安全提交仓库。
+# 密钥请在 .env 中配置 DEEPSEEK_API_KEY。
+
+[adb]
+# adb 可执行文件路径；留空自动探测（环境变量 / MuMu 常见目录 / PATH）
+path = ""
+# 模拟器 adb 端口（MuMu 12 为 16384；旧版可能为 7555）
+port = 16384
+
+[hotkeys]
+record = "f7"      # 记录当前题目 / 评论
+explain = "f8"     # AI 解析当前题目
+aggregate = "f9"   # 整理生成速通手册
+
+[deepseek]
+base_url = "https://api.deepseek.com"
+model = "deepseek-v4-flash"
+# 整理时每批送入的错题数
+batch_size = 25
+
+[data]
+# 数据目录（错题库、截图、图片、手册），整体不入库
+dir = "data"
+handbook_dir = "data/速通手册"
+
+[merge]
+# 评论区记录并入题干记录的允许时间窗口（分钟）
+window_minutes = 3

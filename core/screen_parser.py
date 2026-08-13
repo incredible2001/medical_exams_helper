@@ -1,0 +1,156 @@
+"""解析 uiautomator dump XML → 结构化题目记录。
+
+实测格式（医考帮题面）：
+    text="2022（一试+二试）"                    试卷标签
+    text="U2（一试）"                            单元标签
+    text="A1型题"                               题型
+    text="32 /150"                              题号
+    text="2022U2-32 髋关节前脱位最典型的临床表现是"   题干（带ID前缀）
+    text="A.伸直，外展，外旋畸形"                  选项
+    text="答案：正确答案 B，你的答案 B"             对错
+    text="（外科学P651）"..."                   考点还原
+评论区额外：
+    text="最热评论(47)"                         评论分区
+    text="昵称" / "学校 日期" / 评论内容 / "赞同(N)" ...
+"""
+from __future__ import annotations
+
+import hashlib
+import html
+import re
+from typing import Any
+
+_KNOWN_LABELS = {
+    "考点还原", "标准解析", "解析", "写评论", "笔记", "收藏", "评论", "点赞",
+    "内容持续优化", "难度：", "统计：", "标签：", "纠错",
+}
+
+
+def normalize_text(s: str) -> str:
+    """题干规范化（去空白/标点/转义/小写），用于去重哈希。"""
+    return re.sub(r"[\s\W_]+", "", html.unescape(s)).lower()
+
+
+def question_hash(stem: str) -> str:
+    """题干 → 稳定短哈希（去重主键）。"""
+    return hashlib.md5(normalize_text(stem).encode("utf-8")).hexdigest()[:16]
+
+
+def parse_dump(xml: str) -> dict[str, Any]:
+    texts = [html.unescape(t) for t in re.findall(r'text="([^"]*)"', xml) if t.strip()]
+    scr: dict[str, Any] = {
+        "paper": None, "unit": None, "question_type": None,
+        "question_no": None, "question_id": None, "stem": None,
+        "options": {}, "correct_answer": None, "my_answer": None,
+        "kaodian": None, "standard_explanation": None, "stats": None,
+        "explanation_blob": None,
+        "comment_tags": [], "comments": [],
+        "is_question_screen": False, "has_image": _has_image_node(xml),
+    }
+
+    # 按顺序扫描
+    for i, t in enumerate(texts):
+        # 试卷标签
+        if scr["paper"] is None and re.fullmatch(r"20\d{2}（.+）", t):
+            scr["paper"] = t
+        # 单元标签（"U2（一试）"）
+        if re.fullmatch(r"U\d+（[^）]*）", t) and t != scr["unit"]:
+            scr["unit"] = t
+        # 题型
+        if scr["question_type"] is None and re.fullmatch(r"[A-Z]\d*型题", t):
+            scr["question_type"] = t
+        # 题号
+        m = re.fullmatch(r"(\d+)\s*/\s*\d+", t)
+        if m and scr["question_no"] is None:
+            scr["question_no"] = m.group(1)
+        # 题干（带 ID 前缀：2022U2-32 ...）
+        m = re.match(r"^(20\d{2}U\d+-\d+)\s+(.+)$", t)
+        if m and scr["stem"] is None:
+            scr["question_id"] = m.group(1)
+            scr["stem"] = m.group(2)
+            scr["is_question_screen"] = True
+        # 选项
+        m = re.match(r"^([A-E])\.\s*(.+)$", t)
+        if m and m.group(1) not in scr["options"]:
+            scr["options"][m.group(1)] = m.group(2)
+        # 对错
+        m = re.match(r"^答案：正确答案\s*([A-E])\s*，你的答案\s*([A-E])$", t)
+        if m:
+            scr["correct_answer"], scr["my_answer"] = m.group(1), m.group(2)
+        # 统计
+        if t.startswith("本题") and "收藏" in t and scr["stats"] is None:
+            scr["stats"] = t
+        # 评论标签（答案有争议 704 等）
+        m = re.match(r"^(答案有争议|题目质量低|评论无看点|评论很精彩)\s*\d+$", t)
+        if m:
+            scr["comment_tags"].append(t)
+        # 解析类标签：考点还原 / 标准解析 / 解析 → 下一条非标签文本为正文
+        if t in ("考点还原", "标准解析", "解析"):
+            nxt = _next_content(texts, i)
+            if t == "考点还原":
+                if scr["kaodian"] is None and nxt:
+                    scr["kaodian"] = nxt
+            else:
+                if scr["standard_explanation"] is None and nxt:
+                    scr["standard_explanation"] = nxt
+        # 逐选项解析 blob（长文本且含 X对/X错）
+        if len(t) > 150 and re.search(r"（[A-E]对|（[A-E]错）", t) and scr["explanation_blob"] is None:
+            scr["explanation_blob"] = t
+
+    scr["comments"] = _extract_comments(texts)
+    return scr
+
+
+def _next_content(texts: list[str], i: int) -> str | None:
+    """标签文本之后的下一条非标签、非纯数字文本。"""
+    for nxt in texts[i + 1:]:
+        if nxt in _KNOWN_LABELS or re.fullmatch(r"\d+", nxt):
+            continue
+        return nxt
+    return None
+
+
+def _is_school_line(line: str) -> bool:
+    """判断是否为评论的学校行：学校/医院名（无中文标点，≤40字）+ 日期结尾。
+
+    刻意排除含中文标点的行（如「内容持续优化，最近更新时间：2026-06-16」）。
+    """
+    return bool(re.fullmatch(r"[^，。；：？！、\s]{1,40}\s*20\d{2}-\d{2}-\d{2}", line))
+
+
+def _extract_comments(texts: list[str]) -> list[dict[str, Any]]:
+    """从文本流中提取评论 (昵称, 内容, 赞同数)。
+
+    评论块结构稳定：昵称 → 「学校 日期」 → [内容] → 赞同(N) → 反对(N) → [N 回复]。
+    以「后一行是学校日期」来定位昵称位置，每条评论的内容 = 该昵称到下一个昵称之间
+    的第一个非数字、非标签、非赞同/反对/回复文本；赞同数取其中的「赞同(N)」。
+    """
+    comments: list[dict[str, Any]] = []
+    n = len(texts)
+    nick_idx = [i for i in range(n - 1)
+                if _is_school_line(texts[i + 1])]
+    for idx, i in enumerate(nick_idx):
+        end = nick_idx[idx + 1] if idx + 1 < len(nick_idx) else n
+        content, likes = "", 0
+        for t in texts[i + 2:end]:
+            if re.fullmatch(r"\d+", t) or t in _KNOWN_LABELS:
+                continue
+            m = re.fullmatch(r"赞同\((\d+)\)", t)
+            if m:
+                likes = int(m.group(1))
+                continue
+            if re.fullmatch(r"反对\(\d+\)", t) or re.fullmatch(r"\d*\s*回复", t):
+                continue
+            if not content:
+                content = t
+        comments.append({"nickname": texts[i], "content": content, "likes": likes})
+    return comments
+
+
+def _has_image_node(xml: str) -> bool:
+    """是否有较大尺寸的 ImageView（疑似题干配图，如心电图/影像）。"""
+    for m in re.finditer(r'class="android\.widget\.ImageView"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
+        l, t, r, b = (int(g) for g in m.groups())
+        if r - l > 80 and b - t > 80:
+            return True
+    return False

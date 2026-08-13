@@ -1,0 +1,19 @@
+# ===== 密钥（绝不入库）=====
+.env
+
+# ===== 个人学习数据（含医考帮真题内容，受版权保护，绝不入库）=====
+data/
+*.log
+
+# ===== Python =====
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# ===== IDE / OS =====
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
