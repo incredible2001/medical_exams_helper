@@ -12,10 +12,11 @@ __pycache__/
 .venv/
 venv/
 
-# ===== 打包产物（exe 构建）=====
+# ===== 打包产物（exe 构建 / 分发 zip）=====
 build/
 dist/
 *.spec
+*.zip
 
 # ===== IDE / OS =====
 .idea/
