@@ -4,8 +4,8 @@ openai>=1.40.0
 python-dotenv>=1.0.0
 # 全局热键（F7/F8/F9）；Windows 若提示权限不足，改用 pynput
 keyboard>=0.13.5
-# 图片题截图裁剪
-pillow>=10.0.0
 
+# 可选：图片题裁剪（当前版本暂未启用图片保存）
+# pillow>=10.0.0
 # OCR 兜底（可选，uiautomator 取不到文字时启用）：
 # rapidocr_onnxruntime>=1.3.0

@@ -30,9 +30,21 @@ class ExplainService:
         if not screen["stem"]:
             yield ("error", "当前屏幕未识别到题目。请把题干区置于可见位置再按 F8。")
             return
-        header = screen.get("question_id") or ""
-        title = f"{header}  {screen['stem'][:40]}" if header else screen["stem"][:40]
-        yield ("header", title)
+        # 头部：完整题干 + 全部选项 + 正确答案/你的答案，让解析时有完整上下文
+        head_parts = []
+        if screen.get("question_id"):
+            head_parts.append(screen["question_id"])
+        if screen.get("question_type"):
+            head_parts.append(screen["question_type"])
+        lines = ["  ".join(head_parts), screen["stem"]]
+        if screen.get("options"):
+            lines.append("　".join(f"{k}. {v}" for k, v in sorted(screen["options"].items())))
+        if screen.get("correct_answer"):
+            ans = f"正确答案：{screen['correct_answer']}"
+            if screen.get("my_answer"):
+                ans += f"　你的答案：{screen['my_answer']}"
+            lines.append(ans)
+        yield ("header", "\n".join(lines))
         try:
             for tok in self.client.chat_stream(build_explain_messages(screen)):
                 yield ("token", tok)

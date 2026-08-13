@@ -245,7 +245,7 @@ class App:
         self.last_explained, self.last_explained_text = None, ""
         for kind, payload in self.explain_svc.explain():
             if kind == "header":
-                self._append_text(f"▍{payload}\n\n")
+                self._append_text(f"▍ {payload}\n\n")
             elif kind == "token":
                 self.last_explained_text += payload
                 self._append_text(payload)

@@ -4,7 +4,15 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
+
+# 打包为 exe（--windowed 无控制台）时，子进程 adb 会弹黑色控制台窗口。
+# 加 CREATE_NO_WINDOW 让子进程不创建新窗口。（仅在 Windows 上有效）
+if sys.platform == "win32":
+    _NO_WINDOW = subprocess.CREATE_NO_WINDOW
+else:
+    _NO_WINDOW = 0
 
 # MuMu 12 常见安装路径（覆盖官方默认 + 用户实测路径）
 _MUMU_ADB_CANDIDATES = [
@@ -36,7 +44,8 @@ def find_adb(explicit: str | None = None) -> str:
     # PATH 中的 adb
     try:
         which = subprocess.run(
-            ["where", "adb"], capture_output=True, text=True, shell=False
+            ["where", "adb"], capture_output=True, text=True, shell=False,
+            creationflags=_NO_WINDOW,
         )
         if which.returncode == 0 and which.stdout.strip():
             return which.stdout.strip().splitlines()[0]
@@ -65,7 +74,8 @@ class Adb:
         cmd = [self.adb_path] + args
         try:
             proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace"
+                cmd, capture_output=True, text=True, timeout=timeout, encoding="utf-8",
+                errors="replace", creationflags=_NO_WINDOW,
             )
         except subprocess.TimeoutExpired as e:
             raise AdbError(f"adb 命令超时: {' '.join(args)}") from e
@@ -126,7 +136,7 @@ class Adb:
         """返回当前屏幕 PNG 字节。"""
         self.ensure_serial()
         cmd = [self.adb_path, "-s", self._serial, "exec-out", "screencap", "-p"]
-        proc = subprocess.run(cmd, capture_output=True, timeout=20)
+        proc = subprocess.run(cmd, capture_output=True, timeout=20, creationflags=_NO_WINDOW)
         if proc.returncode != 0 or not proc.stdout:
             raise AdbError("截屏失败。")
         return proc.stdout

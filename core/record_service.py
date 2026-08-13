@@ -1,23 +1,19 @@
 """F7 记录服务：两按式错题收集。
 
-第一按（题干屏）：完整记录题干/选项/对错/考点还原/图片。
+第一按（题干屏）：完整记录题干/选项/对错/考点还原。
 第二按（评论区）：把标准解析 + 评论并入最近匹配的题干记录。
 匹配信号：时间邻近 + 试卷标签一致 + （可选）解析 blob 的正确答案字母校验。
+
+注：图片题暂不裁剪保存（视频解析缩略图会误判为题目图），has_image 仅作标记。
 """
 from __future__ import annotations
 
-import io
 import re
 from typing import Any
 
 from core.adb import AdbError
 from core.db import DB
 from core.screen_parser import parse_dump, question_hash
-
-try:
-    from PIL import Image
-except ImportError:  # 未装 pillow 时禁用图片裁剪
-    Image = None
 
 
 def _blob_correct_answer(blob: str) -> str | None:
@@ -40,25 +36,20 @@ class RecordService:
             return False, f"adb 错误：{e}"
         screen = parse_dump(xml)
         if screen["stem"]:
-            return self._record_question(screen, xml)
+            return self._record_question(screen)
         if screen["comments"] or screen["standard_explanation"] or screen["explanation_blob"]:
             return self._record_comments(screen)
         return False, "未识别到题目或评论区，请确认停留在题目 / 评论区"
 
     # ---------- 第一按：题干屏 ----------
-    def _record_question(self, screen: dict, xml: str) -> tuple[bool, str]:
+    def _record_question(self, screen: dict) -> tuple[bool, str]:
         q = self._screen_to_question(screen)
         self.db.upsert_question(q)
         added = self.db.append_comments(q["id"], screen["comments"])  # 部分滚动时题干屏也可能带评论
         if added:  # 新评论并入已整理过的题 → 下次 F9 重整理
             self.db.touch_dirty(q["id"])
-        img_path = self._crop_image(q["id"], xml)
-        if img_path:
-            self.db.upsert_question({"id": q["id"], "image_path": img_path})
         bound = self.db.bind_pending(q["id"], screen["paper"] or "") if screen["paper"] else 0
         parts = [f"已记录 {q.get('question_id') or q['id'][:8]}"]
-        if img_path:
-            parts.append("含图已存档")
         if added:
             parts.append(f"评论+{added}")
         if bound:
@@ -119,44 +110,3 @@ class RecordService:
             "has_image": screen.get("has_image") or False,
             "processed": 0,
         }
-
-    def _crop_image(self, qid: str, xml: str) -> str | None:
-        """题干屏带图时，从截图裁剪最大图块存到 data/images/<hash>.png。"""
-        if Image is None or not self._screen_has_big_image(xml):
-            return None
-        try:
-            png = self.adb.screencap_png()
-        except AdbError:
-            return None
-        try:
-            img = Image.open(io.BytesIO(png))
-        except Exception:  # noqa: BLE001
-            return None
-        l, t, r, b = self._largest_image_bounds(xml)
-        if l is None or r - l < 100 or b - t < 100:
-            return None
-        # 留 8px 边距，防裁到边框
-        crop = img.crop((max(0, l - 8), max(0, t - 8), r + 8, b + 8))
-        img_dir = __import__("pathlib").Path(self.cfg["data"]["dir"]) / "images"
-        img_dir.mkdir(parents=True, exist_ok=True)
-        out = img_dir / f"{qid}.png"
-        crop.save(out)
-        return str(out)
-
-    @staticmethod
-    def _screen_has_big_image(xml: str) -> bool:
-        for m in re.finditer(r'class="android\.widget\.ImageView"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
-            l, t, r, b = (int(g) for g in m.groups())
-            if (r - l) * (b - t) > 100 * 100:
-                return True
-        return False
-
-    @staticmethod
-    def _largest_image_bounds(xml: str) -> tuple[int | None, ...]:
-        best, best_area = None, 0
-        for m in re.finditer(r'class="android\.widget\.ImageView"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
-            l, t, r, b = (int(g) for g in m.groups())
-            area = (r - l) * (b - t)
-            if area > best_area:
-                best_area, best = area, (l, t, r, b)
-        return best or (None, None, None, None)
