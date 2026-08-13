@@ -1,9 +1,9 @@
 @echo off
 chcp 65001 >nul
 rem ==============================================
-rem  医考帮备考助手 - 打包成独立 exe（给同学用，无需装 Python）
+rem  医考帮备考助手 - 打包成独立 exe（免 Python 环境，可独立运行）
 rem  产物：dist\医考帮备考助手.exe
-rem  分享时把以下文件放进同一个文件夹再压缩发给同学：
+rem  分享时把以下文件放进同一个文件夹再压缩：
 rem    医考帮备考助手.exe + config.toml + taxonomy.json + .env.example
 rem ==============================================
 title 医考帮备考助手 - 打包 exe
@@ -47,13 +47,13 @@ if exist "dist\yikao_helper.exe" (
 echo.
 echo  打包完成！exe 在  dist\医考帮备考助手.exe
 echo.
-echo  分享给同学时，把以下文件放进同一个文件夹再压缩：
+echo  分享时，把以下文件放进同一个文件夹再压缩：
 echo    医考帮备考助手.exe
 echo    config.toml
 echo    taxonomy.json
-echo    .env.example （同学改成 .env 并填自己的 Key）
+echo    .env.example （使用前重命名为 .env 并填入自己的 Key）
 echo.
-echo  同学用法：解压后双击 exe，点「设置」填 Key，开刷。
+echo  使用方式：解压后双击 exe，点「设置」填 Key 后即可使用。
 echo.
 pause
 exit /b 0
