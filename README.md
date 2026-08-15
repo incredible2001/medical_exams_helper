@@ -5,6 +5,7 @@
 
 > ⚠️ **定位说明**：本工具**不做自动刷题/自动点击**。你手动刷题，工具只负责记录与讲解。
 > 题目与评论会被发送至 **DeepSeek API** 处理；你的个人数据（错题库、手册）仅存本地。
+> 📜 **更新记录**：见 [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
@@ -40,7 +41,7 @@
 > 开发者打包：运行 `build_exe.bat` 生成 `dist\医考帮备考助手.exe`。
 
 ### 环境要求
-- Windows + [MuMu 模拟器 12](https://www.mumuplayer.com/)（或其他可 adb 连接的安卓模拟器）
+- Windows + [MuMu 模拟器 12 / 15](https://www.mumuplayer.com/)（或其他可 adb 连接的安卓模拟器）
 - 医考帮 App（答题模式下）
 
 ### 配置
@@ -102,6 +103,18 @@ core/
 └── config.py            配置加载
 scripts/test_explain.py  命令行实测（单题讲解）
 ```
+
+## 🩺 常见问题
+
+**按 F7/F8 报 `adb 命令失败 [139] ... uiautomator dump`**
+这是模拟器内 `uiautomator` 进程偶发崩溃（退出码 139 = 段错误，MuMu 12 / Android 12 常见）。程序已内置「自动重试 + `--compressed` 降级」，多数情况重试即成功。若仍反复：
+0. 看报错里的「当前 adb 设备」：应只列出一台、且是正在用的模拟器。若列了多台（比如同时开了多个 MuMu 实例），关掉多余的，只留一台在用的；
+1. 确认模拟器窗口保持打开、未最小化/挂起（挂起时 dump 易失败）；
+2. 确认屏幕未锁屏；
+3. 在模拟器里重启一下医考帮 App 再试。
+
+**找不到 adb**
+工具会依次探测环境变量 `ANDROID_HOME`/`ANDROID_SDK_ROOT`、MuMu 常见目录、`PATH`。都没有时，在 `config.toml` 的 `[adb] path` 填你 MuMu 里的 `adb.exe` 路径（斜杠用 `/`），端口保持 `16384`。
 
 ## 免责声明
 本工具仅作个人学习辅助，不替代官方教材与备考课程。AI 讲解可能存在错误，请以教材/官方解析为准。

@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # 打包为 exe（--windowed 无控制台）时，子进程 adb 会弹黑色控制台窗口。
@@ -41,6 +42,14 @@ def find_adb(explicit: str | None = None) -> str:
     for cand in _MUMU_ADB_CANDIDATES:
         if Path(cand).exists():
             return cand
+    # MuMuPlayer 各版本（12/15 等）通用目录：MuMuPlayer*/nx_device/*/shell/adb.exe
+    for base in ("C:/Program Files", "C:/Program Files (x86)", "D:/", "E:/"):
+        try:
+            hits = sorted(Path(base).glob("MuMuPlayer*/nx_device/*/shell/adb.exe"))
+        except OSError:
+            continue
+        if hits:
+            return str(hits[0])
     # PATH 中的 adb
     try:
         which = subprocess.run(
@@ -64,13 +73,13 @@ class Adb:
     def __init__(self, adb_path: str | None = None, host: str = "127.0.0.1", port: int | None = None):
         self.adb_path = find_adb(adb_path)
         if not self.adb_path:
-            raise AdbError("未找到 adb。请确认已安装 MuMu/Android SDK，或在 config.yaml 中指定 adb_path。")
+            raise AdbError("未找到 adb。请确认已安装 MuMu/Android SDK，或在 config.toml 的 [adb] 中指定 path。")
         self.host = host
         self.port = port
         self._serial: str | None = None
 
     # ---------- 基础命令 ----------
-    def _run(self, args: list[str], timeout: int = 15) -> str:
+    def _run(self, args: list[str], timeout: int = 15, check: bool = True) -> str:
         cmd = [self.adb_path] + args
         try:
             proc = subprocess.run(
@@ -79,20 +88,20 @@ class Adb:
             )
         except subprocess.TimeoutExpired as e:
             raise AdbError(f"adb 命令超时: {' '.join(args)}") from e
-        if proc.returncode != 0:
+        if check and proc.returncode != 0:
             raise AdbError(f"adb 命令失败 [{proc.returncode}]: {' '.join(args)}\n{proc.stderr.strip()}")
         return proc.stdout
 
-    def _run_serial(self, args: list[str], timeout: int = 15) -> str:
+    def _run_serial(self, args: list[str], timeout: int = 15, check: bool = True) -> str:
         serial = self.ensure_serial()
         try:
-            return self._run(["-s", serial] + args, timeout=timeout)
+            return self._run(["-s", serial] + args, timeout=timeout, check=check)
         except AdbError as e:
             # MuMu adb 偶发掉线（device offline）→ 重连后重试一次
             if "offline" in str(e) or "not found" in str(e).lower():
                 self._serial = None
                 serial = self.ensure_serial()
-                return self._run(["-s", serial] + args, timeout=timeout)
+                return self._run(["-s", serial] + args, timeout=timeout, check=check)
             raise
 
     # ---------- 连接 ----------
@@ -142,20 +151,44 @@ class Adb:
         return proc.stdout
 
     def dump_ui_xml(self) -> str:
-        """执行 uiautomator dump 并返回界面 XML 文本。失败自动重试 2 次。"""
+        """执行 uiautomator dump 并返回界面 XML 文本。
+
+        重要：MuMu 15 / Android 15 (x86_64) 上 uiautomator dump 会「文件写好后、
+        退出关停线程时」段错误，导致退出码 139（SIGSEGV）——但 XML 产物是好的。
+        因此这里不以退出码判断成败，而是按「文件是否写出了有效 XML」判断；
+        失败时再按「普通 → --compressed」轮换 + 间隔重试。
+        """
+        plans = [
+            ["shell", "uiautomator", "dump", "/sdcard/yk_dump.xml"],
+            ["shell", "uiautomator", "dump", "--compressed", "/sdcard/yk_dump.xml"],
+            ["shell", "uiautomator", "dump", "/sdcard/yk_dump.xml"],
+            ["shell", "uiautomator", "dump", "--compressed", "/sdcard/yk_dump.xml"],
+        ]
         last_err: Exception | None = None
-        for _ in range(3):
+        for i, args in enumerate(plans):
+            if i > 0:
+                time.sleep(0.8)
             try:
                 self.ensure_serial()
-                # 写进设备 /sdcard 再 cat 出来，避免直接 /dev/tty 在某些设备上的问题
-                self._run_serial(["shell", "uiautomator", "dump", "/sdcard/yk_dump.xml"])
+                # 先删旧文件：只接受本次 dump 新写出的 XML，避免读到上一次残留
+                self._run_serial(["shell", "rm", "-f", "/sdcard/yk_dump.xml"], check=False, timeout=5)
+                # dump 不检查退出码：Android 15 上可能「写成功但退出段错误(139)」
+                self._run_serial(args, check=False)
                 xml = self._run_serial(["exec-out", "cat", "/sdcard/yk_dump.xml"])
                 if "<" in xml[:200]:
                     return xml
             except AdbError as e:
                 last_err = e
                 continue
-        raise AdbError(f"uiautomator dump 失败: {last_err}")
+        devs = "、".join(self.devices()) or "（无）"
+        detail = str(last_err) if last_err else "dump 无有效输出（未拿到界面 XML）"
+        raise AdbError(
+            f"uiautomator dump 失败: {detail}\n"
+            f"当前 adb 设备：{devs}\n"
+            "提示：uiautomator 在 Android 15 模拟器上可能「文件写好了但退出时崩溃(139)」；"
+            "本工具已按文件内容判断成败。若仍失败，请确认模拟器未最小化/挂起、屏幕未锁屏，"
+            "必要时重启模拟器再试。"
+        )
 
     def extract_image_bounds(self, xml: str) -> list[tuple[int, int, int, int]]:
         """从 dump XML 中找出题干区域附近的 ImageView 控件边界 (l,t,r,b)。"""

@@ -8,8 +8,36 @@ from pathlib import Path
 
 from core.config import load_taxonomy
 from core.db import DB
+from core.screen_parser import normalize_text
 
 CARD = "card"
+
+
+def build_weak_points(questions: list[dict]) -> dict[str, list[dict]]:
+    """从每题的一句话考点（ai_summary）生成薄弱知识点。
+
+    返回 {分组: [{"text": 考点, "qidx": 组内第几题（对应手册卡片编号）}]}。
+    按题目顺序去重；随新题加入自动更新，无条数上限。
+    """
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for q in questions:
+        groups.setdefault(q.get("system_group") or "其他", []).append(q)
+    weak: dict[str, list[dict]] = {}
+    for g, qs in groups.items():
+        seen: set[str] = set()
+        pts: list[dict] = []
+        for idx, q in enumerate(qs, 1):
+            s = (q.get("ai_summary") or "").strip()
+            if not s:
+                continue
+            k = normalize_text(s)
+            if k in seen:
+                continue
+            seen.add(k)
+            pts.append({"text": s, "qidx": idx})
+        if pts:
+            weak[g] = pts
+    return weak
 
 
 def render(db: DB, config: dict) -> str | None:
@@ -18,7 +46,7 @@ def render(db: DB, config: dict) -> str | None:
     if not questions:
         return None
     taxonomy = load_taxonomy()
-    weak = db.meta_get("weak_points", {}) or {}
+    weak = build_weak_points(questions)
     comments = {q["id"]: db.get_comments(q["id"]) for q in questions}
 
     groups: dict[str, list[dict]] = defaultdict(list)
@@ -48,7 +76,7 @@ def _render_group_md(group: str, qs: list[dict], comments: dict, weak_points) ->
     lines = [f"# {group} · 错题卡（{len(qs)} 题）", ""]
     if weak_points:
         lines += ["## 薄弱知识点", ""]
-        lines += [f"- {p}" for p in weak_points[:8]]
+        lines += [f"- [{p['qidx']}] {p['text']}" for p in weak_points]
         lines += [""]
     for i, q in enumerate(qs, 1):
         lines += [f"### {i}. [{q.get('question_id') or q['id'][:8]}] {q.get('stem')}", ""]
@@ -128,6 +156,12 @@ section h2 {{ font-size: 20px; border-left: 4px solid var(--acc);
 .weakbox {{ background:#fffbe8; border:1px solid #f0e3b0; border-radius: 10px;
   padding: 12px 16px; margin: 10px 0 16px; font-size: 14px; }}
 .weakbox b {{ color:#8a6d1a; }}
+.weakbox ul {{ margin:6px 0 0; padding:0; list-style:none; }}
+.weakbox li {{ padding:2px 0; }}
+.weakbox a {{ color:var(--ink); text-decoration:none; }}
+.weakbox a:hover {{ color:var(--acc); }}
+.widx {{ display:inline-block; min-width:18px; text-align:center; background:var(--acc);
+  color:#fff; border-radius:5px; font-size:12px; padding:0 4px; margin-right:6px; }}
 details.card {{ background:var(--card); border:1px solid var(--line);
   border-radius: 12px; margin: 10px 0; overflow:hidden; }}
 details.card summary {{ cursor:pointer; padding: 12px 16px; list-style:none; }}
@@ -183,19 +217,26 @@ window.addEventListener('beforeprint', () => toggleAll(true));
 
 
 def _render_section(group: str, qs: list[dict], comments: dict, weak_points) -> str:
+    slug = _slug(group)
     cards = []
     for i, q in enumerate(qs, 1):
-        cards.append(_render_card(i, q, comments.get(q["id"], [])))
+        cards.append(_render_card(i, q, comments.get(q["id"], []), slug))
     weak_html = ""
     if weak_points:
-        items = "".join(f"<li>{_html.escape(p)}</li>" for p in weak_points[:8])
-        weak_html = f'<div class="weakbox"><b>薄弱知识点：</b><ul>{items}</ul></div>'
-    return (f'<section id="sec-{_slug(group)}">'
+        rows = []
+        for p in weak_points:
+            cid = f"q-{slug}-{p['qidx']}"
+            rows.append(
+                f'<li><a href="#{cid}" onclick="document.getElementById(\'{cid}\').open=true">'
+                f'<span class="widx">{p["qidx"]}</span>{_html.escape(p["text"])}</a></li>'
+            )
+        weak_html = f'<div class="weakbox"><b>薄弱知识点</b><ul>{"".join(rows)}</ul></div>'
+    return (f'<section id="sec-{slug}">'
             f'<h2>{_html.escape(group)} <span style="color:var(--mut);font-size:14px">（{len(qs)} 题）</span></h2>'
             f'{weak_html}{"".join(cards)}</section>')
 
 
-def _render_card(i: int, q: dict, cs: list[dict]) -> str:
+def _render_card(i: int, q: dict, cs: list[dict], slug: str) -> str:
     ok = q.get("my_answer") == q.get("correct_answer")
     ok_cls = "ok" if ok else "no"
     ok_label = "答对" if ok else "答错"
@@ -218,7 +259,7 @@ def _render_card(i: int, q: dict, cs: list[dict]) -> str:
         f'<div class="aiex-body">{_html.escape(aiex)}</div></details>'
         if aiex else ""
     )
-    return f"""<details class="card" id="q{i}">
+    return f"""<details class="card" id="q-{slug}-{i}">
 <summary>
   <div class="qtitle">{i}. <span class="qid">{_html.escape(q.get("question_id") or "")}</span>{_html.escape(q.get("stem") or "")}</div>
   <div class="qmeta"><span class="{ok_cls}">{ok_label}</span> ｜ 正确答案 {q.get("correct_answer")} ｜ 你的答案 {q.get("my_answer") or "-"}</div>

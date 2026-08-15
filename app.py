@@ -38,11 +38,16 @@ class App:
         os.makedirs(cfg["data"]["dir"], exist_ok=True)
         self.db = DB(os.path.join(cfg["data"]["dir"], "medical_notes.db"))
 
-        self.adb = Adb()
         try:
+            # 构造也包进 try：adb 缺失时不应崩溃，而是进界面提示
+            self.adb = Adb(
+                adb_path=cfg.get("adb", {}).get("path") or None,
+                port=cfg.get("adb", {}).get("port") or None,
+            )
             self.adb.connect()
             self._adb_ready, self._adb_err = True, None
         except AdbError as e:
+            self.adb = None
             self._adb_ready, self._adb_err = False, str(e)
 
         try:
@@ -227,6 +232,9 @@ class App:
 
     # ---------------- 动作 ----------------
     def _do_record(self):
+        if not self._adb_ready:
+            self._set_status("adb 未连接，无法记录")
+            return
         self._set_status("正在记录当前屏幕…")
         ok, msg = self.record_svc.record()
         self._set_status(msg)

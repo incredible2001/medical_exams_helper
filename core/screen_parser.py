@@ -36,11 +36,36 @@ def question_hash(stem: str) -> str:
     return hashlib.md5(normalize_text(stem).encode("utf-8")).hexdigest()[:16]
 
 
+def _is_skip_before_stem(t: str) -> bool:
+    """ID 前缀题干之前应跳过的非正文文本（头标签 / 第N问 / 选项 / 对错行等）。"""
+    return bool(
+        re.fullmatch(r"第\d+问", t)
+        or re.fullmatch(r"20\d{2}（[^）]*）", t)
+        or re.fullmatch(r"U\d+（[^）]*）", t)
+        or re.fullmatch(r"[A-Z]\d*型题", t)
+        or re.fullmatch(r"\d+\s*/\s*\d+", t)
+        or re.match(r"^[A-E]\.\s*\S+", t)
+        or re.match(r"^答案：", t)
+        or t in _KNOWN_LABELS
+        or re.fullmatch(r"\d+", t)
+    )
+
+
+def _case_before(texts: list[str], i: int) -> str | None:
+    """A3/A4 共用题干（病例）：取子题（下标 i）之前第一个非标签正文。"""
+    for t in reversed(texts[:i]):
+        if _is_skip_before_stem(t):
+            continue
+        return t
+    return None
+
+
 def parse_dump(xml: str) -> dict[str, Any]:
     texts = [html.unescape(t) for t in re.findall(r'text="([^"]*)"', xml) if t.strip()]
     scr: dict[str, Any] = {
         "paper": None, "unit": None, "question_type": None,
         "question_no": None, "question_id": None, "stem": None,
+        "case_stem": None,
         "options": {}, "correct_answer": None, "my_answer": None,
         "kaodian": None, "standard_explanation": None, "stats": None,
         "explanation_blob": None,
@@ -56,18 +81,23 @@ def parse_dump(xml: str) -> dict[str, Any]:
         # 单元标签（"U2（一试）"）
         if re.fullmatch(r"U\d+（[^）]*）", t) and t != scr["unit"]:
             scr["unit"] = t
-        # 题型
-        if scr["question_type"] is None and re.fullmatch(r"[A-Z]\d*型题", t):
+        # 题型（A1/A2/A3/A4/B1/C 型题等）
+        if scr["question_type"] is None and re.fullmatch(r"[A-Z]\d*(?:/[A-Z]\d+)*型题", t):
             scr["question_type"] = t
         # 题号
         m = re.fullmatch(r"(\d+)\s*/\s*\d+", t)
         if m and scr["question_no"] is None:
             scr["question_no"] = m.group(1)
-        # 题干（带 ID 前缀：2022U2-32 ...）
-        m = re.match(r"^(20\d{2}U\d+-\d+)\s+(.+)$", t)
+        # 题干（带 ID 前缀，年份后的代码不固定：2022U2-32 / 2022ESU1-1 ...）
+        m = re.match(r"^(20\d{2}[A-Za-z0-9]*-\d+)\s+(.+)$", t)
         if m and scr["stem"] is None:
             scr["question_id"] = m.group(1)
             scr["stem"] = m.group(2)
+            # A3/A4 共用题干（病例）：把子题前的病例正文并入题干，保留完整上下文
+            case = _case_before(texts, i)
+            if case:
+                scr["case_stem"] = case
+                scr["stem"] = case + "\n" + scr["stem"]
             scr["is_question_screen"] = True
         # 选项
         m = re.match(r"^([A-E])\.\s*(.+)$", t)

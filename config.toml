@@ -4,6 +4,8 @@
 
 [adb]
 # adb 可执行文件路径；留空自动探测（环境变量 / MuMu 常见目录 / PATH）
+# 自动探测失败时，把这里填成你 MuMu 里的 adb.exe 路径（注意斜杠用 /），例如：
+#   path = "D:/Program Files/Netease/MuMu/nx_device/12.0/shell/adb.exe"
 path = ""
 # 模拟器 adb 端口（MuMu 12 为 16384；旧版可能为 7555）
 port = 16384
