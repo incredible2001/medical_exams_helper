@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime
 import html as _html
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -11,6 +12,55 @@ from core.db import DB
 from core.screen_parser import normalize_text
 
 CARD = "card"
+
+_MARK_RE = re.compile(r"\*\*(.+?)\*\*", re.S)
+
+# 旧数据没有 ** 标记时，用启发式关键短语兜底高亮
+_HEUR_PATTERNS = [
+    r"必备条件[^，。；、]{2,16}",
+    r"首选[^，。；、]{2,14}",
+    r"最常(?:见|伤|损)[^，。；、]{2,16}",
+    r"最常见于[^，。；、]{2,16}",
+    r"最可能(?:是|为)[^，。；、]{2,14}",
+    r"典型表现为[^，。；、]{2,16}",
+    r"(?:常)?呈[阴阳]性(?:（[^）]*）)?",
+]
+
+
+def _merge_spans(spans) -> list[tuple[int, int]]:
+    spans = sorted(spans)
+    if not spans:
+        return []
+    out: list[list[int]] = [list(spans[0])]
+    for s, e in spans[1:]:
+        if s <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], e)
+        else:
+            out.append([s, e])
+    return [(s, e) for s, e in out]
+
+
+def highlight_key(text: str) -> str:
+    """把一句话考点（ai_summary）的关键部分渲染成 <mark> 高亮，HTML 已转义。
+
+    优先识别 **...** 标记（AI 新版 prompt 输出）；旧数据无标记时用启发式关键短语兜底。
+    """
+    if not text:
+        return ""
+    marks = [(m.start(1), m.end(1)) for m in _MARK_RE.finditer(text)]
+    if not marks:
+        marks = _merge_spans(
+            (m.start(), m.end())
+            for pat in _HEUR_PATTERNS
+            for m in re.finditer(pat, text)
+        )
+    parts, prev = [], 0
+    for s, e in marks:
+        parts.append(_html.escape(text[prev:s]))
+        parts.append(f"<mark>{_html.escape(text[s:e])}</mark>")
+        prev = e
+    parts.append(_html.escape(text[prev:]))
+    return "".join(parts)
 
 
 def build_weak_points(questions: list[dict]) -> dict[str, list[dict]]:
@@ -108,8 +158,9 @@ def _render_html(order: list[str], groups: dict, comments: dict, weak: dict) -> 
     stats = " ｜ ".join(f"{g} {len(groups[g])} 题" for g in order)
 
     toc = "\n".join(
-        f'<li><a href="#sec-{_slug(g)}">{_html.escape(g)}</a>'
-        f'<span class="cnt">{len(groups[g])}</span></li>'
+        f'<li><a href="#sec-{_slug(g)}">'
+        f'<span class="toc-name">{_html.escape(g)}</span>'
+        f'<span class="cnt">{len(groups[g])}</span></a></li>'
         for g in order
     )
 
@@ -128,12 +179,27 @@ def _render_html(order: list[str], groups: dict, comments: dict, weak: dict) -> 
 :root {{
   --bg: #f7f8fa; --card: #ffffff; --ink: #1f2328; --mut: #6b7280;
   --acc: #1a7f64; --line: #e5e7eb; --good: #1a7f64; --bad: #c0392b;
-  --mark: #fff3bf;
+  --mark: #fff3bf; --side: 170px;
 }}
 * {{ box-sizing: border-box; }}
+html {{ scroll-behavior: smooth; }}
 body {{ margin:0; background:var(--bg); color:var(--ink);
   font: 15px/1.7 "PingFang SC","Microsoft YaHei",system-ui,sans-serif; }}
-.wrap {{ max-width: 860px; margin: 0 auto; padding: 28px 20px 80px; }}
+.layout {{ display:flex; min-height:100vh; }}
+/* 左侧固定目录 */
+nav.toc {{ position:fixed; top:0; left:0; bottom:0; width:var(--side); overflow-y:auto;
+  background:var(--card); border-right:1px solid var(--line); padding:18px 12px; z-index:10; }}
+nav.toc h2 {{ font-size:14px; margin:0 0 10px; color:var(--mut); letter-spacing:1px; }}
+nav.toc ul {{ list-style:none; padding:0; margin:0; }}
+nav.toc li a {{ display:flex; align-items:center; justify-content:space-between; gap:8px;
+  padding:7px 9px; border-radius:8px; color:var(--ink); text-decoration:none; margin:2px 0;
+  font-size:14px; }}
+nav.toc li a:hover {{ background:#eef2f0; }}
+nav.toc li a.active {{ background:var(--acc); color:#fff; }}
+nav.toc .toc-name {{ min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+nav.toc .cnt {{ color:var(--mut); font-size:12px; flex:none; }}
+nav.toc li a.active .cnt {{ color:#d9f2ea; }}
+.content {{ flex:1; margin-left:var(--side); max-width:940px; padding:28px 26px 90px; }}
 header {{ margin-bottom: 20px; }}
 h1 {{ font-size: 26px; margin: 0 0 6px; }}
 .sub {{ color: var(--mut); font-size: 13px; }}
@@ -143,14 +209,7 @@ h1 {{ font-size: 26px; margin: 0 0 6px; }}
 .toolbar button {{ padding: 6px 12px; border-radius: 8px; border:1px solid var(--line);
   background:var(--card); cursor:pointer; font-size: 13px; }}
 .toolbar button:hover {{ background:#eef2f0; }}
-nav.toc {{ background:var(--card); border:1px solid var(--line); border-radius: 12px;
-  padding: 14px 18px; margin-bottom: 24px; }}
-nav.toc h2 {{ font-size: 14px; margin: 0 0 8px; color: var(--mut); }}
-nav.toc ul {{ list-style:none; padding:0; margin:0; }}
-nav.toc li {{ display:flex; justify-content:space-between; padding: 4px 0; border-bottom:1px dashed var(--line); }}
-nav.toc li:last-child {{ border-bottom:none; }}
-nav.toc a {{ color: var(--ink); text-decoration:none; }}
-nav.toc .cnt {{ color: var(--mut); font-size: 12px; }}
+.toolbar button.primary {{ background:var(--acc); border-color:var(--acc); color:#fff; }}
 section h2 {{ font-size: 20px; border-left: 4px solid var(--acc);
   padding-left: 10px; margin: 32px 0 10px; }}
 .weakbox {{ background:#fffbe8; border:1px solid #f0e3b0; border-radius: 10px;
@@ -160,6 +219,7 @@ section h2 {{ font-size: 20px; border-left: 4px solid var(--acc);
 .weakbox li {{ padding:2px 0; }}
 .weakbox a {{ color:var(--ink); text-decoration:none; }}
 .weakbox a:hover {{ color:var(--acc); }}
+.weakbox mark {{ background:#ffe08a; }}
 .widx {{ display:inline-block; min-width:18px; text-align:center; background:var(--acc);
   color:#fff; border-radius:5px; font-size:12px; padding:0 4px; margin-right:6px; }}
 details.card {{ background:var(--card); border:1px solid var(--line);
@@ -177,6 +237,8 @@ details.card summary::-webkit-details-marker {{ display:none; }}
 .opts .opt {{ display:block; padding:2px 0; }}
 .opts mark {{ background:var(--mark); padding:0 4px; border-radius:4px; }}
 .qbody b.k {{ color:var(--acc); }}
+mark {{ background:var(--mark); color:inherit; padding:0 3px; border-radius:4px;
+  -webkit-print-color-adjust:exact; print-color-adjust:exact; }}
 .comments {{ background:#f6f9fb; border-radius:8px; padding:8px 12px; margin-top:8px; font-size:13px; }}
 .comments .c {{ padding:3px 0; }}
 .comments .c .who {{ color:var(--mut); font-size:12px; }}
@@ -186,13 +248,25 @@ details.aiex summary {{ cursor:pointer; font-size:13px; color:var(--acc); }}
 details.aiex .aiex-body {{ margin-top:6px; font-size:13px; white-space:pre-wrap; color:#374151; }}
 @media print {{
   body {{ background:#fff; }}
-  .toolbar, nav.toc {{ display:none; }}
+  .layout {{ display:block; }}
+  nav.toc, .toolbar {{ display:none !important; }}
+  .content {{ margin-left:0; max-width:none; padding:16px; }}
   details.card {{ break-inside: avoid; }}
+  /* 仅打印薄弱知识点 */
+  body.print-weak .stats {{ display:none !important; }}
+  body.print-weak details.card,
+  body.print-weak details.aiex,
+  body.print-weak .comments {{ display:none !important; }}
+  body.print-weak section h2 {{ margin:14px 0 6px; font-size:17px; }}
+  body.print-weak .weakbox {{ break-inside:avoid; -webkit-print-color-adjust:exact; print-color-adjust:exact; }}
+  body.print-weak .weakbox a {{ text-decoration:none; color:var(--ink); }}
 }}
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="layout">
+<nav class="toc"><h2>📑 目录</h2><ul>{toc}</ul></nav>
+<div class="content">
 <header>
   <h1>📖 考前速通手册</h1>
   <div class="sub">医考帮备考助手 · 生成于 {now} · 共 {total} 题</div>
@@ -200,17 +274,37 @@ details.aiex .aiex-body {{ margin-top:6px; font-size:13px; white-space:pre-wrap;
   <div class="toolbar">
     <button onclick="toggleAll(true)">展开全部</button>
     <button onclick="toggleAll(false)">折叠全部</button>
-    <button onclick="window.print()">🖨 打印</button>
+    <button class="primary" onclick="printWeak()">🖨 打印薄弱知识点</button>
+    <button onclick="window.print()">打印全部</button>
   </div>
 </header>
-<nav class="toc"><h2>目录</h2><ul>{toc}</ul></nav>
 {body}
+</div>
 </div>
 <script>
 function toggleAll(open) {{
   document.querySelectorAll('details.card').forEach(d => d.open = open);
 }}
+// 打印：只输出各分组「薄弱知识点」，不打印题目卡片
+function printWeak() {{
+  document.body.classList.add('print-weak');
+  window.print();
+}}
 window.addEventListener('beforeprint', () => toggleAll(true));
+window.addEventListener('afterprint', () => document.body.classList.remove('print-weak'));
+// 目录滚动高亮当前分组
+(function () {{
+  const links = Array.from(document.querySelectorAll('nav.toc a'));
+  const secs = Array.from(document.querySelectorAll('section'));
+  function onScroll() {{
+    const pos = window.scrollY + 80;
+    let cur = secs[0];
+    for (const s of secs) {{ if (s.offsetTop <= pos) cur = s; else break; }}
+    links.forEach(l => l.classList.toggle('active', l.getAttribute('href') === '#' + cur.id));
+  }}
+  window.addEventListener('scroll', onScroll, {{ passive: true }});
+  onScroll();
+}})();
 </script>
 </body>
 </html>"""
@@ -228,7 +322,7 @@ def _render_section(group: str, qs: list[dict], comments: dict, weak_points) -> 
             cid = f"q-{slug}-{p['qidx']}"
             rows.append(
                 f'<li><a href="#{cid}" onclick="document.getElementById(\'{cid}\').open=true">'
-                f'<span class="widx">{p["qidx"]}</span>{_html.escape(p["text"])}</a></li>'
+                f'<span class="widx">{p["qidx"]}</span>{highlight_key(p["text"])}</a></li>'
             )
         weak_html = f'<div class="weakbox"><b>薄弱知识点</b><ul>{"".join(rows)}</ul></div>'
     return (f'<section id="sec-{slug}">'
@@ -266,7 +360,7 @@ def _render_card(i: int, q: dict, cs: list[dict], slug: str) -> str:
 </summary>
 <div class="qbody">
   <div class="opts">{options}</div>
-  {"<p><b class=\"k\">一句话考点：</b>" + _html.escape(q.get("ai_summary") or "") + "</p>" if q.get("ai_summary") else ""}
+  {"<p><b class=\"k\">一句话考点：</b>" + highlight_key(q.get("ai_summary") or "") + "</p>" if q.get("ai_summary") else ""}
   {"<p><b class=\"k\">口诀/技巧：</b>" + _html.escape(q.get("ai_mnemonics") or "") + "</p>" if q.get("ai_mnemonics") else ""}
   {"<p><b class=\"k\">错选原因：</b>" + _html.escape(q.get("ai_wrong_reason") or "") + "</p>" if q.get("ai_wrong_reason") else ""}
   {"<p><b class=\"k\">官方解析：</b>" + _html.escape(expl[:300]) + "</p>" if expl else ""}
