@@ -11,7 +11,7 @@ _QUESTION_COLS = [
     "id", "question_id", "stem", "options", "correct_answer", "my_answer",
     "paper", "unit", "question_type", "kaodian", "standard_explanation",
     "explanation_blob", "stats", "comment_tags", "has_image", "image_path",
-    "chapter_label", "system_group", "ai_summary", "ai_mnemonics",
+    "chapter_label", "system_group", "chapter", "ai_summary", "ai_mnemonics",
     "ai_wrong_reason", "ai_explanation", "created_at", "updated_at", "processed",
 ]
 
@@ -52,6 +52,7 @@ class DB:
                     image_path TEXT,
                     chapter_label TEXT,
                     system_group TEXT,
+                    chapter TEXT,
                     ai_summary TEXT,
                     ai_mnemonics TEXT,
                     ai_wrong_reason TEXT,
@@ -91,6 +92,10 @@ class DB:
                 CREATE INDEX IF NOT EXISTS idx_questions_paper ON questions(paper);
                 """
             )
+            # 旧库迁移：v1.0.2 及更早没有 chapter 列，加列（学科级细分类，v1.0.3 引入）
+            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(questions)")}
+            if "chapter" not in cols:
+                self._conn.execute("ALTER TABLE questions ADD COLUMN chapter TEXT")
             self._conn.commit()
 
     # ---------- helpers ----------
@@ -155,15 +160,32 @@ class DB:
             row = cur.fetchone()
             return self._unpack(row) if row else None
 
-    def set_question_ai(self, qid: str, group: str, summary: str,
+    def set_question_ai(self, qid: str, group: str, chapter: str, summary: str,
                         mnemonic: str, wrong_reason: str) -> None:
         with self._lock:
             self._conn.execute(
-                "UPDATE questions SET system_group=?, ai_summary=?, ai_mnemonics=?, "
+                "UPDATE questions SET system_group=?, chapter=?, ai_summary=?, ai_mnemonics=?, "
                 "ai_wrong_reason=?, processed=1, updated_at=? WHERE id=?",
-                (group, summary, mnemonic, wrong_reason, now_iso(), qid),
+                (group, chapter, summary, mnemonic, wrong_reason, now_iso(), qid),
             )
             self._conn.commit()
+
+    def mark_all_unprocessed(self) -> int:
+        """把所有已整理题标记为待整理（全量重跑用），返回标记条数。"""
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE questions SET processed=0, updated_at=? "
+                "WHERE stem IS NOT NULL AND processed=1",
+                (now_iso(),),
+            )
+            self._conn.commit()
+            return cur.rowcount
+
+    def unprocessed_count(self) -> int:
+        with self._lock:
+            return self._conn.execute(
+                "SELECT COUNT(*) FROM questions WHERE stem IS NOT NULL AND processed=0"
+            ).fetchone()[0]
 
     def unprocessed_questions(self) -> list[dict]:
         with self._lock:

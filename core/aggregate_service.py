@@ -1,4 +1,4 @@
-"""F9 整理服务：增量分批调 DeepSeek → 错题卡/分组/一句话考点 → 生成速通手册。
+"""F9 整理服务：增量分批调 DeepSeek → 错题卡/分组/学科/一句话考点 → 生成速通手册。
 （薄弱知识点由 renderer 从每题 ai_summary 实时生成，见 renderer.build_weak_points）
 
 事件流：
@@ -8,16 +8,34 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Iterator
 
 from core import renderer
+from core.config import load_taxonomy
 from core.db import DB
 from core.deepseek_client import DeepSeekClient, DeepSeekError
 
-_VALID_GROUPS = [
-    "基础医学", "临床内科", "临床外科", "妇儿",
-    "预防与公共卫生", "医学人文", "中医学基础",
+# 分组与学科清单由 taxonomy.json 派生，保持一致
+_TAXONOMY = load_taxonomy()
+_VALID_GROUPS = list(_TAXONOMY["order"])
+_CHAPTER_LINES = [  # prompt 里展示的「分组：学科1/学科2」清单
+    f"{g}：{' / '.join(_TAXONOMY['groups'].get(g, []))}" for g in _VALID_GROUPS
 ]
+_VALID_CHAPTERS = {s for subs in _TAXONOMY["groups"].values() for s in subs}
+
+# 常见别名归一（教材名差异），其余照原样
+_CHAPTER_ALIASES = {
+    "系统解剖学": "解剖学", "局部解剖学": "解剖学",
+    "医学免疫学": "免疫学",
+    "生物化学与分子生物学": "生物化学",
+    "中医学": "中医学基础", "中医基础": "中医学基础",
+}
+
+
+def _normalize_chapter(c: str) -> str:
+    c = re.sub(r"^\d+版", "", (c or "").strip())
+    return _CHAPTER_ALIASES.get(c, c)
 
 
 def build_aggregate_messages(batch: list[dict]) -> list[dict]:
@@ -41,19 +59,24 @@ def build_aggregate_messages(batch: list[dict]) -> list[dict]:
             )
         )
     user = (
-        "下面是一批执业医师真题错题记录。请对每道题完成三件事并输出 JSON：\n\n"
+        "下面是一批执业医师真题错题记录。请对每道题完成六件事并输出 JSON：\n\n"
         + "\n\n".join(records)
         + "\n\n要求：\n"
         + "1. 每道题输出一条 entry，key 必须原样返回上面的 KEY。\n"
         + "2. group 必须精确取自：" + " / ".join(_VALID_GROUPS)
         + "（按题干内容归入临床系统/学科，拿不准取最接近的，宁粗勿细）。\n"
-        + "3. summary：一句话考点（本题核心知识点），写清关键鉴别点、易错点，30~60 字。"
-        + "用 ** 星号把 1~3 个最关键的信息点包起来突出显示（如诊断名、首选药、关键数值、鉴别特征），"
-        + "例如「**铜绿假单胞菌**感染首选**头孢他啶**」；无把握时宁少勿多。\n"
-        + "4. mnemonics：从精选评论提炼一条口诀/做题技巧；评论无价值则依据官方解析自拟一条。\n"
-        + "5. wrong_reason：若考生答错，一句话指出错选思路错在哪；答对则填空串。\n\n"
+        + "3. chapter：在 group 之内再归入最细的学科，必须原样取自下方「学科清单」"
+        + "该 group 对应行里的学科名，不要改动、不要自造、不要带页码：\n"
+        + "\n".join(_CHAPTER_LINES) + "\n"
+        + "（拿不准时选该组里最接近的学科，宁粗勿细。）\n"
+        + "4. summary：一句话考点（本题核心知识点），写清关键鉴别点、易错点，30~60 字。"
+        + "必须至少用一组 **...** 星号把 1~3 个最关键的信息点包起来突出显示"
+        + "（如诊断名、首选药、关键数值、鉴别特征），例如「**铜绿假单胞菌**感染首选**头孢他啶**」；"
+        + "summary 里没有 ** 标记的视为不合格，必须重写。\n"
+        + "5. mnemonics：从精选评论提炼一条口诀/做题技巧；评论无价值则依据官方解析自拟一条。\n"
+        + "6. wrong_reason：若考生答错，一句话指出错选思路错在哪；答对则填空串。\n\n"
         + "严格只输出合法 JSON，结构如下：\n"
-        + '{"entries":[{"key":"","group":"","summary":"","mnemonics":"","wrong_reason":""}]}'
+        + '{"entries":[{"key":"","group":"","chapter":"","summary":"","mnemonics":"","wrong_reason":""}]}'
     )
     return [{"role": "system", "content": "你是执业医师考试备考助手，负责把学生的错题整理成考前速通手册。只输出合法 JSON。"},
             {"role": "user", "content": user}]
@@ -101,7 +124,10 @@ class AggregateService:
                     group = e.get("group") or ""
                     if group not in _VALID_GROUPS:
                         group = "其他"
-                    self.db.set_question_ai(key, group, e.get("summary", ""),
+                    chapter = _normalize_chapter(e.get("chapter") or "")
+                    if chapter not in _VALID_CHAPTERS:
+                        chapter = ""  # 兜底：渲染时用分组名
+                    self.db.set_question_ai(key, group, chapter, e.get("summary", ""),
                                             e.get("mnemonics", ""), e.get("wrong_reason", ""))
                     total += 1
 
