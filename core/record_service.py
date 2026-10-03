@@ -22,6 +22,19 @@ def _blob_correct_answer(blob: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _label(q: dict) -> str:
+    """状态行里的短标识：题号 → 题干前 12 字 → 哈希。
+
+    章节练习等题面没有题号 ID，直接用哈希对用户没有意义。
+    """
+    if q.get("question_id"):
+        return q["question_id"]
+    stem = " ".join((q.get("stem") or "").split())
+    if not stem:
+        return q["id"][:8]
+    return stem[:12] + "…" if len(stem) > 12 else stem
+
+
 class RecordService:
     def __init__(self, adb, db: DB, config: dict):
         self.adb = adb
@@ -49,7 +62,7 @@ class RecordService:
         if added:  # 新评论并入已整理过的题 → 下次 F9 重整理
             self.db.touch_dirty(q["id"])
         bound = self.db.bind_pending(q["id"], screen["paper"] or "") if screen["paper"] else 0
-        parts = [f"已记录 {q.get('question_id') or q['id'][:8]}"]
+        parts = [f"已记录 {_label(q)}"]
         if added:
             parts.append(f"评论+{added}")
         if bound:
@@ -81,7 +94,7 @@ class RecordService:
         added = self.db.append_comments(recent["id"], screen["comments"])
         if added or len(patch) > 1:
             self.db.touch_dirty(recent["id"])  # 新内容并入已整理过的题 → 下次 F9 重整理
-        qid = recent.get("question_id") or recent["id"][:8]
+        qid = _label(recent)
         return True, f"✅ 已并入 {qid} 的评论 +{added} 条" if added else f"✅ 已并入 {qid}（无新评论）"
 
     def _store_pending(self, screen: dict, reason: str = "附近无匹配记录") -> tuple[bool, str]:
@@ -101,6 +114,7 @@ class RecordService:
             "my_answer": screen.get("my_answer"),
             "paper": screen.get("paper"),
             "unit": screen.get("unit"),
+            "chapter_label": screen.get("chapter_label"),
             "question_type": screen.get("question_type"),
             "kaodian": screen.get("kaodian"),
             "standard_explanation": screen.get("standard_explanation"),

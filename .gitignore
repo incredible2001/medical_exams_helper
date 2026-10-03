@@ -22,6 +22,9 @@ release/
 # ===== 临时 / 诊断 =====
 data20260815/
 data20260820/
+data-final/
+# 排障时抓的界面 dump（含真题原文）
+.scratch/
 tools/诊断结果.txt
 tools/诊断截图.png
 

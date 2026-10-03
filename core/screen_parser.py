@@ -5,10 +5,16 @@
     text="U2（一试）"                            单元标签
     text="A1型题"                               题型
     text="32 /150"                              题号
-    text="2022U2-32 髋关节前脱位最典型的临床表现是"   题干（带ID前缀）
+    text="2022U2-32 髋关节前脱位最典型的临床表现是"   题干（真题，带年份ID前缀）
     text="A.伸直，外展，外旋畸形"                  选项
     text="答案：正确答案 B，你的答案 B"             对错
     text="（外科学P651）"..."                   考点还原
+
+另外两种题面（题干前缀形态不同，靠下面的分支分别识别）：
+    模考卷：text="医考帮26执医万人模考二  U1" / text="6.题干正文"（仅题号前缀，无年份）
+    章节练习：text="中医学基础" / text="第一章 中医基本特点" / text="1 /14"
+             / text="我国现存最早的医学专著是"（题干无任何前缀，题号只在顶部）
+
 评论区额外：
     text="最热评论(47)"                         评论分区
     text="昵称" / "学校 日期" / 评论内容 / "赞同(N)" ...
@@ -58,10 +64,47 @@ def _split_mock_unit(t: str) -> tuple[str, str | None]:
     return t, None
 
 
+def _is_header_line(t: str) -> bool:
+    """章节练习模式的顶部章节标签行（「第一章 中医基本特点」「第2节 骨学」）。
+
+    题号在顶部、题干无前缀时，这类行是题干上方最近的正文，必须排除，
+    否则会被当成题干或 A3/A4 病例题干。
+    """
+    return bool(re.match(r"^第\s*[0-9一二三四五六七八九十百千]+\s*[章节讲篇部]", t))
+
+
+def _looks_like_stem(t: str) -> bool:
+    """裸题干候选校验（章节练习）：有实际文字，且不是标签/表头/选项/数字行。"""
+    return bool(len(t) >= 4 and not _is_skip_before_stem(t))
+
+
+def _fallback_source(texts: list[str]) -> str | None:
+    """无试卷标签时的「来源」兜底：取界面顶部第一行的短文本。
+
+    章节练习没有试卷标签，两个屏的顶部栏也不一样：
+    题干屏是「学科 + 章节名」，评论区屏滚走了章节名、只剩学科名。
+    取两屏共有的第一行（学科名），第二按并入评论才有可匹配的键。
+    """
+    t = texts[0] if texts else ""
+    if t and len(t) <= 20 and t not in _KNOWN_LABELS and "。" not in t and not _is_school_line(t):
+        return t
+    return None
+
+
+def _looks_like_case(t: str) -> bool:
+    """A3/A4 共用题干（病例）特征：成段的叙述文字（够长且有中文标点）。
+
+    章节练习里题干上方还可能是科目标题（「中医学基础」）或章节名，靠这个长度+
+    标点条件把它们挡掉，避免把标题当病例并入题干。
+    """
+    return bool(len(t) >= 20 and re.search(r"[，。；：]", t))
+
+
 def _is_skip_before_stem(t: str) -> bool:
     """ID 前缀题干之前应跳过的非正文文本（头标签 / 第N问 / 选项 / 对错行等）。"""
     return bool(
         re.fullmatch(r"第\d+问", t)
+        or _is_header_line(t)                       # 章节练习的章节标题行
         or re.fullmatch(r"20\d{2}（[^）]*）", t)
         or re.fullmatch(r"U\d+（[^）]*）", t)
         or re.fullmatch(r"U\d+", t)                 # 模考卷独立单元号
@@ -78,11 +121,17 @@ def _is_skip_before_stem(t: str) -> bool:
 
 
 def _case_before(texts: list[str], i: int) -> str | None:
-    """A3/A4 共用题干（病例）：取子题（下标 i）之前第一个非标签正文。"""
+    """A3/A4 共用题干（病例）：取子题（下标 i）之前第一个非标签正文。
+
+    这个候选必须「像病例」（见 _looks_like_case）才采用：章节练习里子题上方
+    还可能是科目标题（「生理学」）或章节名（「第八章 尿的生成和排出」），
+    不加这道关卡会被当成病例并进题干（实测：stem 变成「生理学\\n在肾脏产生的是」）。
+    真题卷实测 85 条 A3/A4 病例题干最短 35 字，与门槛（20 字）有充足余量。
+    """
     for t in reversed(texts[:i]):
         if _is_skip_before_stem(t):
             continue
-        return t
+        return t if _looks_like_case(t) else None
     return None
 
 
@@ -91,7 +140,7 @@ def parse_dump(xml: str) -> dict[str, Any]:
     scr: dict[str, Any] = {
         "paper": None, "unit": None, "question_type": None,
         "question_no": None, "question_id": None, "stem": None,
-        "case_stem": None,
+        "case_stem": None, "chapter_label": None,
         "options": {}, "correct_answer": None, "my_answer": None,
         "kaodian": None, "standard_explanation": None, "stats": None,
         "explanation_blob": None,
@@ -99,13 +148,21 @@ def parse_dump(xml: str) -> dict[str, Any]:
         "is_question_screen": False, "has_image": _has_image_node(xml),
     }
 
-    # 是否具备「题目屏」特征（有选项或对错行）。模拟卷题干只带题号前缀（"6.xxx"），
-    # 必须见到选项/对错行才认题干，避免把评论区/解析里的「数字.文本」误当题干。
+    # 是否具备「题目屏」特征（有选项或对错行）。模拟卷/章节练习的题干前缀更弱
+    # （"6.xxx" / 完全无前缀），必须见到选项/对错行才认题干，
+    # 避免把评论区/解析里的「数字.文本」误当题干。
     _q_signal = (any(re.match(r"^答案：正确答案", t) for t in texts)
                  or any(re.match(r"^[A-E]\.\s*\S", t) for t in texts))
 
+    # 题号 / 题型行的下标：章节练习的裸题干必须位于其下方（上方是科目标题、章节名）
+    header_idx = -1
+
     # 按顺序扫描
     for i, t in enumerate(texts):
+        # 章节练习的章节标题行（题号上方，用来给无试卷标签的题一个「来源」标签）
+        if (scr["chapter_label"] is None and header_idx < 0
+                and _is_header_line(t) and len(t) <= 40):
+            scr["chapter_label"] = t
         # 试卷标签（真题 "2022（一试+二试）" / 模考卷 "医考帮26执医万人模考二  U1"）
         if scr["paper"] is None and _is_paper_like(t):
             paper, unit = _split_mock_unit(t)
@@ -116,12 +173,17 @@ def parse_dump(xml: str) -> dict[str, Any]:
         if scr["unit"] is None and re.fullmatch(r"U\d+（[^）]*）|U\d+", t):
             scr["unit"] = t
         # 题型（A1/A2/A3/A4/B1/C 型题等）
+        is_head_line = False   # 本行是否为题号/题型行（正文区从它下面开始）
         if scr["question_type"] is None and re.fullmatch(r"[A-Z]\d*(?:/[A-Z]\d+)*型题", t):
             scr["question_type"] = t
+            is_head_line = True
         # 题号
         m = re.fullmatch(r"(\d+)\s*/\s*\d+", t)
         if m and scr["question_no"] is None:
             scr["question_no"] = m.group(1)
+            is_head_line = True
+        if is_head_line:
+            header_idx = i
         # 题干（真题带 ID 前缀，年份后的代码不固定：2022U2-32 / 2022ESU1-1 ...）
         m = re.match(r"^(20\d{2}[A-Za-z0-9]*-\d+)\s+(.+)$", t)
         if m and scr["stem"] is None:
@@ -146,6 +208,19 @@ def parse_dump(xml: str) -> dict[str, Any]:
                     scr["case_stem"] = case
                     scr["stem"] = case + "\n" + scr["stem"]
                 scr["is_question_screen"] = True
+        # 题干（章节练习：题干完全无前缀，题号只在顶部「1 /14」）
+        # 定位方式：第一个选项行的上一行，且必须落在题号/题型行之下（排除科目标题、章节名）。
+        if (scr["stem"] is None and _q_signal and not scr["options"]
+                and header_idx >= 0 and i - 1 > header_idx
+                and re.match(r"^[A-E]\.\s*\S", t)):
+            cand = texts[i - 1]
+            if _looks_like_stem(cand):
+                scr["stem"] = cand
+                scr["is_question_screen"] = True
+                case = _case_before(texts, i - 1)
+                if case:
+                    scr["case_stem"] = case
+                    scr["stem"] = case + "\n" + scr["stem"]
         # 选项
         m = re.match(r"^([A-E])\.\s*(.+)$", t)
         if m and m.group(1) not in scr["options"]:
@@ -173,6 +248,11 @@ def parse_dump(xml: str) -> dict[str, Any]:
         # 逐选项解析 blob（长文本且含 X对/X错）
         if len(t) > 150 and re.search(r"（[A-E]对|（[A-E]错）", t) and scr["explanation_blob"] is None:
             scr["explanation_blob"] = t
+
+    # 章节练习等无试卷标签的题面：用顶部学科名充当「来源」标签，
+    # 否则 paper 为空 → 评论区第二按无处可并、待绑定评论永远绑不上。
+    if not scr["paper"]:
+        scr["paper"] = _fallback_source(texts)
 
     scr["comments"] = _extract_comments(texts)
     return scr
